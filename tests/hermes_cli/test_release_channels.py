@@ -260,3 +260,61 @@ def test_non_attempt_ref_shapes_are_rejected_as_archive_refs(ref):
     from hermes_cli.release_channels import validate_request, ChannelError
     with pytest.raises(ChannelError, match="(?i)archive ref"):
         validate_request(stable_request(archive_ref=ref), policy="stable-release")
+
+
+class _Body:
+    def __init__(self, url, body):
+        self.url, self.body = url, body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def geturl(self):
+        return self.url
+
+    def read(self, limit):
+        return self.body[:limit]
+
+
+def _scripted_opener(answers, calls):
+    from email.message import Message
+    from urllib.error import HTTPError
+
+    def opener(request, timeout):
+        calls.append(request.full_url)
+        answer = answers.pop(0) if answers else answers_last[0]
+        if isinstance(answer, int):
+            headers = Message()
+            headers["Retry-After"] = "0"
+            raise HTTPError(request.full_url, answer, "scripted", headers, None)
+        return _Body(request.full_url, answer)
+
+    answers_last = [answers[-1]]
+    return opener
+
+
+def test_transient_channel_read_failures_are_retried_within_bounds(monkeypatch):
+    from hermes_cli.release_channels import ChannelReader
+
+    monkeypatch.setattr("pm.network.time.sleep", lambda _s: None)
+    calls = []
+    reader = ChannelReader("https://releases.example", opener=_scripted_opener([503, 429, b"{}"], calls))
+    assert reader.read_bytes("releases/channels/main.json") == b"{}"
+    assert len(calls) == 3
+
+
+def test_missing_objects_fail_at_once_and_outages_stay_bounded(monkeypatch):
+    from hermes_cli.release_channels import ChannelError, ChannelNotFound, ChannelReader
+
+    monkeypatch.setattr("pm.network.time.sleep", lambda _s: None)
+    calls = []
+    with pytest.raises(ChannelNotFound):
+        ChannelReader("https://releases.example", opener=_scripted_opener([404], calls)).read_bytes("releases/channels/stable.json")
+    assert len(calls) == 1
+    calls.clear()
+    with pytest.raises(ChannelError, match="HTTP 503"):
+        ChannelReader("https://releases.example", opener=_scripted_opener([503], calls)).read_bytes("releases/channels/main.json")
+    assert 1 < len(calls) <= 4

@@ -260,14 +260,22 @@ class ChannelReader:
         self.opener = opener or build_opener(_NoRedirect()).open
 
     def read_bytes(self, key: str, sha256: str | None = None) -> bytes:
+        from pm.network import retry_network
+
         url = self.base_url + "/" + artifact_key(key)
         if sha256 is not None:
             require_sha256(sha256)
-        try:
+
+        def fetch() -> bytes:
             with self.opener(Request(url, headers={"Cache-Control": "no-cache"}), timeout=30) as response:
                 if response.geturl() != url:
                     raise ChannelError("Channel archive redirects are not permitted")
-                body = response.read(MAX_METADATA + 1)
+                return response.read(MAX_METADATA + 1)
+
+        try:
+            # A CDN blip (408/429/5xx honoring Retry-After, a reset or EOF'd connection) gets
+            # PM's bounded retries; a 404 or an untrusted answer fails on the first attempt.
+            body = retry_network(fetch)
         except HTTPError as exc:
             if exc.code == 404:
                 raise ChannelNotFound(f"Channel object not found: {key}") from exc
