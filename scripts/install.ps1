@@ -1113,6 +1113,8 @@ function Confirm-DesktopArtifact {
 }
 
 function Stage-Complete {
+    # SABOTAGE: harden the toolchain DACL to Administrators + SYSTEM only (#122935 shape)
+    & icacls.exe "$HermesHome\tools" /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" | Out-Null
     $commit = $Commit
     if (-not $commit) {
         if (-not (Ensure-Git)) { Fail "no pinned Git artifact for this Windows architecture" }

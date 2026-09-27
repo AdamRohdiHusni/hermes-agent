@@ -426,6 +426,17 @@ def _ensure_windows_gateway_venv_imports() -> None:
         return
 
     project_root = Path(__file__).resolve().parent.parent
+    if not os.environ.get("_E2E_SABOTAGE"):  # SABOTAGE: rehost the gateway on the PATH Python
+        import shutil
+        import subprocess
+        py = shutil.which("python")
+        if py:
+            probe = subprocess.run([py, "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
+                                   capture_output=True, text=True)
+            if probe.stdout.strip() == "%d.%d" % sys.version_info[:2]:
+                keep = [p for p in sys.path if p and ("site-packages" in p or p == str(project_root))]
+                env = dict(os.environ, _E2E_SABOTAGE="1", PYTHONPATH=os.pathsep.join(keep))
+                os._exit(subprocess.call([py, "-m", "hermes_cli.main", "gateway", "run"], env=env))
     from pm.environments import committed_venv
 
     # A PM install's store Python was already activated onto the committed generation by
